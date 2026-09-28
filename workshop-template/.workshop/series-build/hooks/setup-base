@@ -1,0 +1,142 @@
+#!/bin/bash
+# Runs as root before the project is mounted.
+# Sets up the Silicon Workshop build host for Ubuntu <ubuntu-version> LTS (<Series> Numbat).
+#
+# TEMPLATE: This hook installs common Ubuntu kernel build dependencies.
+# Add any silicon-specific vendor tools in the marked section below.
+# See README.md for the list of <placeholder> tokens to substitute.
+#   - snapcraft from latest/stable (9.x, supports core24 natively)
+#   - arm64 + armhf foreign architectures and apt cross-arch sources
+#   - cross-toolchains and kernel/BSP build dependencies
+set -euo pipefail
+
+# Install snapcraft. On a fresh <series> container snapd may not have finished
+# seeding yet -- retry for up to 5 minutes.
+if ! command -v snapcraft &>/dev/null; then
+  echo "[<series>-build] Installing snapcraft (latest/stable)..."
+  for i in $(seq 1 30); do
+    snap install snapcraft --classic && break
+    echo "[<series>-build]   waiting for snapd to seed (attempt ${i}/30)..."
+    sleep 10
+  done
+else
+  echo "[<series>-build] snapcraft already installed ($(snapcraft version))"
+fi
+
+# Add arm64 and armhf foreign architectures.
+for arch in arm64 armhf; do
+  if dpkg --print-foreign-architectures | grep -qx "${arch}"; then
+    echo "[<series>-build] ${arch} already registered"
+  else
+    echo "[<series>-build] Adding foreign architecture: ${arch}"
+    dpkg --add-architecture "${arch}"
+  fi
+done
+
+# Fix apt sources for cross-arch package fetching.
+# On <series> (<ubuntu-version>), apt uses deb822 format (/etc/apt/sources.list.d/ubuntu.sources).
+# On older bases it uses the classic /etc/apt/sources.list.
+if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+  # deb822: restrict the existing archive entry to amd64, then append
+  # arm64/armhf entries pointing at ports.ubuntu.com.
+  if ! grep -q "Architectures: amd64" /etc/apt/sources.list.d/ubuntu.sources; then
+    echo "[<series>-build] Restricting ubuntu.sources to amd64 and adding ports..."
+    sed -i '/^Types: deb$/a Architectures: amd64' \
+      /etc/apt/sources.list.d/ubuntu.sources
+    # Append arm64/armhf ports entries for all active suites.
+    suites=$(grep -E "^Suites:" /etc/apt/sources.list.d/ubuntu.sources | head -1 | sed 's/^Suites: //')
+    cat >>/etc/apt/sources.list.d/ubuntu.sources <<EOF
+
+Types: deb
+URIs: http://ports.ubuntu.com/ubuntu-ports
+Suites: ${suites}
+Components: main restricted universe multiverse
+Architectures: arm64 armhf
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+EOF
+  fi
+else
+  # Classic sources.list: add [arch=amd64] to existing amd64 entries and
+  # append ports entries for arm64/armhf.
+  if ! grep -q "arch=amd64" /etc/apt/sources.list; then
+    echo "[<series>-build] Fixing sources.list for cross-arch..."
+    sed -i 's|deb http://archive.ubuntu.com|deb [arch=amd64] http://archive.ubuntu.com|g' \
+      /etc/apt/sources.list
+    sed -i 's|deb http://security.ubuntu.com|deb [arch=amd64] http://security.ubuntu.com|g' \
+      /etc/apt/sources.list
+    cat >>/etc/apt/sources.list <<'EOF'
+
+# arm64/armhf -- added by <series>-build setup-base
+deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports <series> main restricted universe multiverse
+deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports <series>-updates main restricted universe multiverse
+deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports <series>-security main restricted universe multiverse
+deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports <series>-backports main restricted universe multiverse
+EOF
+  fi
+fi
+
+# Add LLVM 21 apt repository.
+# clang-21 / llvm-21-dev are required by the kernel Build-Depends but are not
+# in <Series>'s default archive. The LLVM project provides a signed apt repo.
+if ! apt-cache show clang-21 >/dev/null 2>&1; then
+  echo "[<series>-build] Adding LLVM 21 apt repository..."
+  wget -qO /usr/share/keyrings/llvm-snapshot.gpg.key \
+    https://apt.llvm.org/llvm-snapshot.gpg.key
+  echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg.key] \
+https://apt.llvm.org/<series>/ llvm-toolchain-<series>-21 main" \
+    > /etc/apt/sources.list.d/llvm-21.list
+fi
+
+apt-get update
+
+echo "[<series>-build] Installing build dependencies..."
+apt-get install -y \
+  build-essential fakeroot \
+  bc bison flex cpio rsync \
+  libssl-dev libelf-dev \
+  libdw-dev \
+  dwarves \
+  dwarfdump \
+  git devscripts equivs ubuntu-dev-tools \
+  gnupg \
+  crossbuild-essential-arm64 \
+  crossbuild-essential-armhf \
+  kernel-wedge \
+  debhelper dkms \
+  python3-debian \
+  \
+  `# SILICON-SPECIFIC: add vendor-required build tools here` \
+  `# Example (Renesas): arm-trusted-firmware-tools srecord uuid-dev` \
+  `# Example (MediaTek): (none extra for kernel build)` \
+  \
+  `# kernel deb: Rust module bindings, docs, and health-check tools` \
+  `# Kernel Build-Depends requires: rustc >= 1.82, clang-21, llvm-21-dev` \
+  `# Adjust versions to match the kernel tree's Build-Depends` \
+  bindgen \
+  clang-21 \
+  llvm-21-dev \
+  rustfmt \
+  rustc-1.91 \
+  rust-1.91-src \
+  xmlto \
+  \
+  `# initrd part: arm64 chroot via qemu user-mode + binfmt registration` \
+  qemu-user \
+  qemu-user-binfmt
+
+# The initrd part builds a foreign-arch chroot and runs binaries inside it via
+# qemu user-mode emulation, which needs the binfmt_misc handler registered.
+# Make versioned rustc available as 'rustc' on PATH.
+# The kernel Makefile uses RUSTC=rustc (unversioned).
+echo "[<series>-build] Registering rustc-1.91 as default rustc..."
+update-alternatives --install /usr/bin/rustc rustc /usr/bin/rustc-1.91 191 \
+  --slave /usr/bin/rustfmt rustfmt /usr/bin/rustfmt-1.91 2>/dev/null || true
+echo "[<series>-build] rustc: $(rustc --version 2>/dev/null || echo 'not found')"
+
+echo "[<series>-build] Registering qemu binfmt handlers..."
+if [ ! -e /proc/sys/fs/binfmt_misc/register ]; then
+  mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
+fi
+/usr/lib/systemd/systemd-binfmt 2>/dev/null || systemctl restart systemd-binfmt 2>/dev/null || true
+
+echo "[<series>-build] setup-base complete."

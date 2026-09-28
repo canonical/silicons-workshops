@@ -1,0 +1,38 @@
+# TEMPLATE: rename this file to <vendor>-<series>.yaml when instantiating.
+# Replace all <placeholder> values below.
+name: <vendor>-<series>
+base: ubuntu@<ubuntu-version>
+summary: <Vendor> Silicon Workshop -- <soc> kernel build (Ubuntu <ubuntu-version>)
+description: |
+  Reproducible build environment for the <Vendor> <evk-board> EVK
+  kernel on Ubuntu <ubuntu-version> <Series>.
+
+  What to build is declared in config/workshop.yaml (the customization API);
+  how it is built lives in the packaging SDKs under sdk/.
+
+  Note: set ubuntu.release: <series> in config/workshop.yaml when launching this
+  variant.
+
+  Public commands:
+    clone-kernel        Clone kernel source -> kernel-src/ (run once)
+    kernel-build-debs   Debian SDK  -> out/deb/    (built from kernel-src)
+    kernel-build-snap   Snap SDK    -> out/snap/   (uses Snapcraft Kernel plugin)
+
+# Two functional packaging SDKs + one build-host provisioning SDK.
+sdks:
+  - name: project-deb-sdk
+  - name: project-snap-sdk
+  - name: project-<series>-build
+
+actions:
+  clone-kernel: |
+    cd /project
+    bash sdk/common/bin/clone-kernel "$@"
+
+  kernel-build-debs: |
+    cd /project
+    bash sdk/deb/bin/kernel-build-debs "$@"
+
+  kernel-build-snap: |
+    cd /project
+    bash sdk/snap/bin/kernel-build-snap "$@"

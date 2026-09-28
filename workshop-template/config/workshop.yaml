@@ -1,0 +1,70 @@
+# Silicon Workshop — declarative project configuration (TEMPLATE)
+#
+# This is the customization API for the workshop (SILICON_WORKSHOP_CONTRACT.md
+# §2.4 / §4). It describes *what* to build. The SDK scripts under sdk/ define
+# *how* it is built. A BSP agent specializes this file, not the scripts.
+#
+# INSTANTIATION: Replace every <placeholder> token below with the real value
+# for the target silicon. See README.md for the full list of placeholders and
+# how the create-workshop skill automates this substitution.
+#
+# IMPORTANT: no credentials or per-developer identity live here. Private-repo
+# / PPA / token authentication is supplied at runtime through config/board.env
+# (gitignored) — see config/board.env.example. This satisfies the contract's
+# credentials rule (§14): credentials are never committed to configuration.
+
+schema_version: 1
+
+silicon:
+  vendor: <vendor>          # e.g. renesas | mediatek | qualcomm
+  # SoC family identifier used in diagnostics and metadata.
+  soc: <soc>                # e.g. rzt2h | genio-1200 | sa8775p
+  board: <evk-board>        # e.g. rzt2h-evk | genio-1200-evk
+
+ubuntu:
+  # Ubuntu release the kernel targets. The workshop ships one or more build
+  # environments selected by which .workshop definition you launch.
+  # Keep this in sync with the launched workshop variant.
+  release: <ubuntu-release> # e.g. noble | resolute
+  # Ubuntu Core kernel-snap base: core24 (noble) or core26 (resolute).
+  core_base: <core-base>    # core24 | core26
+
+kernel:
+  # Kernel source repository. Accepts any git URL:
+  #   Private Launchpad:  git+ssh://git.launchpad.net/~team/project/+git/repo
+  #   Public Launchpad:   https://git.launchpad.net/~team/project/+git/repo
+  #   GitHub / other:     https://github.com/org/repo
+  # Authentication for private repositories is supplied at runtime via
+  # ssh-agent and config/board.env, never here.
+  repository: <kernel-repo-url>
+  ref:
+    type: tag               # branch | tag | commit — always use a release tag
+    value: <kernel-ref>     # e.g. Ubuntu-qcom-6.8.0-1080.85 (resolve from Launchpad)
+  # Ubuntu kernel config flavour (debian/scripts/misc/annotations --flavour).
+  # Confirm against debian/debian.env in the cloned tree.
+  config:
+    type: flavour
+    value: <kernel-flavour> # e.g. renesas | mtk | generic
+  # Device trees to validate/stage. Leave empty to stage every DTB the tree
+  # produces for the target arch.
+  device_trees: []
+
+toolchain:
+  # Target architecture: arm64 or armhf.
+  arch: <toolchain-arch>    # arm64 | armhf
+  # Cross-compile prefix. Leave empty to auto-derive from arch on an amd64
+  # host (arm64 → aarch64-linux-gnu-, armhf → arm-linux-gnueabihf-).
+  cross_compile: ""
+
+# Additional local APT archives / PPAs the build needs. Tokens for private
+# PPAs are supplied at runtime via config/board.env, not listed here.
+archives:
+  ppas: []
+
+# Kernel patches applied after checkout, before configure (paths relative to
+# the workshop root). Empty for the reference EVK.
+patches: []
+
+# Out-of-tree driver integration. Empty for the reference EVK.
+drivers:
+  out_of_tree: []

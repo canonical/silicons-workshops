@@ -1,0 +1,21 @@
+name: <series>-build
+version: "0.1"
+title: <Vendor> Kernel Build Host SDK (Ubuntu <ubuntu-version> <Series>)
+summary: Build-host provisioning for the <Vendor> Silicon Workshop on Ubuntu <ubuntu-version> (snapcraft stable)
+description: |
+  Provisions the <Vendor> build host on Ubuntu <ubuntu-version> <Series>: snapcraft
+  (latest/stable), arm64 (Cortex-A55) and armhf (Cortex-R52) foreign
+  architectures and cross-toolchains, kernel/BSP build dependencies, and qemu
+  binfmt for the initrd part's foreign-arch chroot.
+
+  This is a build-host provisioning SDK (hooks only) — it is NOT one of the
+  three functional SDKs. The functional SDKs are kernel-sdk, deb-sdk and
+  snap-sdk. Pairs with .workshop/<vendor>-<series>.yaml.
+license: GPL-2.0-only
+
+plugs:
+  ssh-agent:
+    interface: ssh-agent
+  build-cache:
+    interface: mount
+    workshop-target: /var/cache/kernel-build

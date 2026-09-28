@@ -1,0 +1,89 @@
+#!/usr/bin/bash
+# kernel-build-snap — Renesas Silicon Workshop Snap Packaging SDK
+#
+# Self-contained: builds the Ubuntu Core kernel snap directly from source.
+#
+#   read configuration (config/workshop.yaml)
+#       ↓ validate configuration / environment
+#       ↓ ensure kernel source (clone + checkout configured revision)
+#       ↓ apply configured patches
+#       ↓ snapcraft pack (kernel repo's snapcraft.yaml)
+#       ↓ stage .snap → out/snap/
+#       ↓ validate snap
+#       ↓ success
+#
+# The snap is built from source (see DESIGN.md § Divergences).
+#
+# Usage:
+#   kernel-build-snap [--config PATH]
+#
+# Environment:
+#   SNAPCRAFT_OPTS   extra flags passed to `snapcraft pack`
+#   WORKSHOP_ARCH    override toolchain.arch
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/../lib"
+COMMON_DIR="${SCRIPT_DIR}/../../common"
+
+export WORKSHOP_LOG_TAG="snap-sdk"
+# shellcheck source=/dev/null
+source "${COMMON_DIR}/workshop.sh"
+# shellcheck source=/dev/null
+source "${COMMON_DIR}/source.sh"
+for lib in pack validate; do
+    # shellcheck source=/dev/null
+    source "${LIB_DIR}/${lib}.sh"
+done
+
+CONFIG_PATH=""
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        --config)   CONFIG_PATH="${2}"; shift 2 ;;
+        --config=*) CONFIG_PATH="${1#--config=}"; shift ;;
+        --help|-h)
+            cat <<'HELP'
+kernel-build-snap — build the Ubuntu Core kernel snap from source.
+
+Usage:
+  kernel-build-snap [--config PATH]
+
+Output:
+  out/snap/*.snap
+  out/snap/metadata/
+
+Environment:
+  SNAPCRAFT_OPTS, WORKSHOP_ARCH
+HELP
+            exit 0 ;;
+        *) echo "Unknown option: ${1} (see kernel-build-snap --help)" >&2; exit 1 ;;
+    esac
+done
+
+WORKSHOP_ROOT="$(workshop_find_root)"
+workshop_log "Workshop root: ${WORKSHOP_ROOT}"
+if [[ -n "${CONFIG_PATH}" ]]; then
+    [[ -f "${CONFIG_PATH}" ]] || workshop_fail "Config file not found: ${CONFIG_PATH}"
+fi
+workshop_read_config "${WORKSHOP_ROOT}"
+workshop_validate_config
+workshop_resolve_toolchain
+
+# --- source (must already be cloned: run clone-kernel first) ----------------
+RESOLVED_SHA="$(workshop_require_source "${WORKSHOP_ROOT}")"
+workshop_log "Using kernel-src at commit: ${RESOLVED_SHA}"
+workshop_apply_patches "${WORKSHOP_ROOT}" "${CFG_PATCHES:-}"
+
+# --- build / stage / validate ----------------------------------------------
+snap_build    "${WORKSHOP_ROOT}" "${KERNEL_ARCH}"
+snap_stage    "${WORKSHOP_ROOT}"
+snap_validate "${WORKSHOP_ROOT}"
+
+workshop_log ""
+workshop_log "════════════════════════════════════════════════════════════════"
+workshop_log "kernel-build-snap succeeded"
+workshop_log "  Commit:   ${RESOLVED_SHA}"
+workshop_log "  Snap:     out/snap/*.snap"
+workshop_log "  Metadata: out/snap/metadata/"
+workshop_log "════════════════════════════════════════════════════════════════"

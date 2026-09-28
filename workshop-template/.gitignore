@@ -1,0 +1,10 @@
+# Runtime state (created by the workshop; never committed).
+cache/
+build/
+out/
+kernel-src/
+gadget-src/
+.workshop.lock
+
+# Optional local GPG signing key (if you ever add signed builds).
+config/gpg-signing-key.asc

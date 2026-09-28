@@ -1,0 +1,37 @@
+#!/bin/bash
+# Runs as the workshop user, in /project, after the project is mounted.
+# Adds SSH host keys so git clones don't prompt, and (optionally) imports a
+# local GPG signing key.
+#
+# No credentials/identity are read from project configuration (contract §14).
+# Public https:// repos need no setup. For a PRIVATE git+ssh:// kernel or
+# gadget repo, load your key into ssh-agent and connect the ssh-agent plug:
+#     workshop connect renesas-<series>/deb-sdk:ssh-agent
+# and, if the host needs an explicit Launchpad user, add it to your OWN
+# ~/.ssh/config outside the workshop (never to project config).
+set -euo pipefail
+
+# Add github.com and git.launchpad.net host keys for both the workshop user and
+# root (snapcraft --destructive-mode clones as root) so clones don't hang on an
+# interactive host-key prompt.
+for host in github.com git.launchpad.net; do
+  for knownhosts in ~/.ssh/known_hosts /root/.ssh/known_hosts; do
+    dir=$(dirname "$knownhosts")
+    sudo mkdir -p "$dir" 2>/dev/null || mkdir -p "$dir"
+    if ! grep -q "${host}" "$knownhosts" 2>/dev/null; then
+      echo "[renesas-<series>-build] Adding ${host} host keys to ${knownhosts}..."
+      ssh-keyscan -t rsa,ecdsa,ed25519 "${host}" 2>/dev/null \
+        | sudo tee -a "$knownhosts" >/dev/null
+    fi
+  done
+done
+
+if [ -f /project/config/gpg-signing-key.asc ]; then
+  echo "[renesas-<series>-build] Importing GPG signing key from config/gpg-signing-key.asc..."
+  gpg --batch --import /project/config/gpg-signing-key.asc || true
+fi
+
+echo "[renesas-<series>-build] Ready."
+echo "[renesas-<series>-build]   1) workshop run -- clone-kernel"
+echo "[renesas-<series>-build]   2) workshop run -- kernel-build-debs   (or kernel-build-snap)"
+echo "[renesas-<series>-build] setup-project complete."

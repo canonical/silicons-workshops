@@ -1,0 +1,15 @@
+name: deb-sdk
+version: "0.1"
+summary: <Vendor> Debian Packaging SDK
+description: |
+  Debian Packaging SDK for the <Vendor> Silicon Workshop. Builds Ubuntu kernel
+  Debian packages directly from the configured kernel source, using the tree's
+  own debian/rules packaging machinery.
+
+  Public command:
+    kernel-build-debs — build Ubuntu kernel .debs → out/deb/
+license: GPL-2.0-only
+
+plugs:
+  ssh-agent:
+    interface: ssh-agent

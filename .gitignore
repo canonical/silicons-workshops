@@ -1,0 +1,9 @@
+# Workshop runtime artifacts (never in source)
+kernel-src/
+out/
+.workshop.lock
+
+# OS / editor noise
+.DS_Store
+*.swp
+*~
