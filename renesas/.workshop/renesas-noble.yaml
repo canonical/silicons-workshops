@@ -1,24 +1,24 @@
 name: renesas-noble
 base: ubuntu@24.04
-summary: Renesas Silicon Workshop — RZ/T2H kernel build (Ubuntu 24.04)
-description: |
-  Reproducible build environment for the Renesas RZ/T2H (and RZ/N2H) EVK
-  kernel on Ubuntu 24.04 Noble.
-
-  What to build is declared in config/workshop.yaml (the customization API);
-  how it is built lives in the packaging SDKs under sdk/.
-
-  Note: set ubuntu.release: noble in config/workshop.yaml when launching this
-  variant (defaults ship resolute).
-
-  Public commands:
-    clone-kernel        Clone kernel source → kernel-src/ (run once)
-    kernel-build-debs   Debian SDK  → out/deb/    (built from kernel-src)
-    kernel-build-snap   Snap SDK    → out/snap/   (built from kernel-src)
-
-  Extra (OUT of contract scope — see DESIGN.md):
-    clone-gadget        Clone renesas-bootassets → gadget-src/
-    gadget-build        gadget snap → out/gadget/
+# Renesas Silicon Workshop — RZ/T2H kernel build (Ubuntu 24.04)
+#
+# Reproducible build environment for the Renesas RZ/T2H (and RZ/N2H) EVK
+# kernel on Ubuntu 24.04 Noble.
+#
+# What to build is declared in config/workshop.yaml (the customization API);
+# how it is built lives in the packaging SDKs under sdk/.
+#
+# Note: set ubuntu.release: noble in config/workshop.yaml when launching this
+# variant (defaults ship resolute).
+#
+# Public commands:
+#   clone-kernel        Clone kernel source → kernel-src/ (run once)
+#   kernel-build-debs   Debian SDK  → out/deb/    (built from kernel-src)
+#   kernel-build-snap   Snap SDK    → out/snap/   (built from kernel-src)
+#
+# Extra (OUT of contract scope — see DESIGN.md):
+#   clone-gadget        Clone renesas-bootassets → gadget-src/
+#   gadget-build        gadget snap → out/gadget/
 
 # Two functional packaging SDKs + one build-host provisioning SDK.
 # (See DESIGN.md § Divergences: no separate Kernel SDK; each packaging SDK
