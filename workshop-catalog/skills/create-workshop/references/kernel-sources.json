@@ -96,7 +96,7 @@
           "repo": "~canonical-kernel/ubuntu/+source/linux-xilinx-zynqmp/+git/jammy",
           "tag_prefix": "Ubuntu-xilinx-zynqmp-",
           "flavour": "xilinx-zynqmp",
-          "note": "ZCU104 on 5.15.0-1082: .deb and Ubuntu Core kernel snap (core22) built on 2026-11-04 with manual edits that are now part of the template; not re-run since. Not booted on hardware.",
+          "note": "ZCU104 on 5.15.0-1082. The .deb build and the Ubuntu Core kernel snap (core22) were built on 2026-11-04 with manual edits that are now part of the template. On 2026-11-05 the snap was rebuilt from a freshly generated workshop with no edits and no repairs (stages launch, clone, deps, snap); the .deb was not re-run since the template fixes. Not booted on hardware.",
           "build_validated": {"deb": true, "snap": true}
         },
         "noble": {
