@@ -38,8 +38,8 @@ kernel:
   # ssh-agent and config/board.env, never here.
   repository: <kernel-repo-url>
   ref:
-    type: tag               # branch | tag | commit — always use a release tag
-    value: <kernel-ref>     # e.g. Ubuntu-qcom-6.8.0-1080.85 (resolve from Launchpad)
+    type: <kernel-ref-type> # tag | commit — a release tag, or a commit when the repository publishes no release tags
+    value: <kernel-ref>     # e.g. Ubuntu-qcom-6.8.0-1080.85 (tag) or a full commit SHA
   # Ubuntu kernel config flavour (debian/scripts/misc/annotations --flavour).
   # Confirm against debian/debian.env in the cloned tree.
   config:

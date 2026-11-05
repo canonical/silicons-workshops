@@ -1,0 +1,165 @@
+#!/bin/bash
+# Runs as root before the project is mounted.
+# Sets up the Silicon Workshop build host for Ubuntu <ubuntu-version> LTS (<Series>).
+#
+# TEMPLATE: This hook installs common Ubuntu kernel build dependencies.
+#   - snapcraft from latest/stable (9.x)
+#   - arm64 + armhf foreign architectures and apt cross-arch sources
+#   - cross-toolchains and kernel/BSP build dependencies
+#
+# Two package lists are kept separate on purpose:
+#   TOOLCHAIN_PACKAGES  chosen by the create-workshop skill from the series and
+#                       the kernel's Build-Depends (clang / Rust / bindgen).
+#                       Exactly one "toolchain:" block below survives.
+#   EXTRA_PACKAGES      vendor- or kernel-specific additions. Append here; the
+#                       skill's repair step also appends here.
+set -euo pipefail
+
+EXTRA_PACKAGES=(
+  # @EXTRA-PACKAGES-BEGIN (one package per line; managed list)
+  # @EXTRA-PACKAGES-END
+)
+
+# Install snapcraft. On a fresh <series> container snapd may not have finished
+# seeding yet -- retry for up to 5 minutes.
+if ! command -v snapcraft &>/dev/null; then
+  echo "[<series>-build] Installing snapcraft (latest/stable)..."
+  for i in $(seq 1 30); do
+    snap install snapcraft --classic && break
+    echo "[<series>-build]   waiting for snapd to seed (attempt ${i}/30)..."
+    sleep 10
+  done
+else
+  echo "[<series>-build] snapcraft already installed ($(snapcraft version))"
+fi
+
+# Add arm64 and armhf foreign architectures.
+for arch in arm64 armhf; do
+  if dpkg --print-foreign-architectures | grep -qx "${arch}"; then
+    echo "[<series>-build] ${arch} already registered"
+  else
+    echo "[<series>-build] Adding foreign architecture: ${arch}"
+    dpkg --add-architecture "${arch}"
+  fi
+done
+
+# Fix apt sources for cross-arch package fetching.
+# On <series> (<ubuntu-version>), apt uses deb822 format (/etc/apt/sources.list.d/ubuntu.sources).
+# On older bases it uses the classic /etc/apt/sources.list.
+if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+  # deb822: restrict the existing archive entry to amd64, then append
+  # arm64/armhf entries pointing at ports.ubuntu.com.
+  if ! grep -q "Architectures: amd64" /etc/apt/sources.list.d/ubuntu.sources; then
+    echo "[<series>-build] Restricting ubuntu.sources to amd64 and adding ports..."
+    sed -i '/^Types: deb$/a Architectures: amd64' \
+      /etc/apt/sources.list.d/ubuntu.sources
+    # Append arm64/armhf ports entries for all active suites.
+    suites=$(grep -E "^Suites:" /etc/apt/sources.list.d/ubuntu.sources | head -1 | sed 's/^Suites: //')
+    cat >>/etc/apt/sources.list.d/ubuntu.sources <<EOF
+
+Types: deb
+URIs: http://ports.ubuntu.com/ubuntu-ports
+Suites: ${suites}
+Components: main restricted universe multiverse
+Architectures: arm64 armhf
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+EOF
+  fi
+else
+  # Classic sources.list: add [arch=amd64] to existing amd64 entries and
+  # append ports entries for arm64/armhf.
+  if ! grep -q "arch=amd64" /etc/apt/sources.list; then
+    echo "[<series>-build] Fixing sources.list for cross-arch..."
+    sed -i 's|deb http://archive.ubuntu.com|deb [arch=amd64] http://archive.ubuntu.com|g' \
+      /etc/apt/sources.list
+    sed -i 's|deb http://security.ubuntu.com|deb [arch=amd64] http://security.ubuntu.com|g' \
+      /etc/apt/sources.list
+    cat >>/etc/apt/sources.list <<'EOF'
+
+# arm64/armhf -- added by <series>-build setup-base
+deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports <series> main restricted universe multiverse
+deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports <series>-updates main restricted universe multiverse
+deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports <series>-security main restricted universe multiverse
+deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports <series>-backports main restricted universe multiverse
+EOF
+  fi
+fi
+
+# >>> toolchain:none
+# Kernels without Rust support (focal/jammy, 5.4 / 5.15): the kernel's
+# Build-Depends has no clang, llvm or rustc. dwarfdump is separate from dwarves
+# and is required by the jammy 5.15 build.
+TOOLCHAIN_PACKAGES=(dwarfdump)
+# <<< toolchain:none
+
+# >>> toolchain:clang18
+# Noble 6.8 kernels: clang-18, bindgen-0.65 and the default rustc, all from the
+# Noble archive.
+TOOLCHAIN_PACKAGES=(clang-18 bindgen-0.65 rustc rust-src rustfmt)
+# <<< toolchain:clang18
+
+# >>> toolchain:clang21
+# Kernels that need clang-21 and rustc >= 1.82 (Resolute, some Noble trees).
+# clang-21 is not in Noble's archive: the LLVM project provides a signed apt repo.
+if ! apt-cache show clang-21 >/dev/null 2>&1; then
+  echo "[<vendor>-<series>-build] Adding LLVM 21 apt repository..."
+  wget -qO /usr/share/keyrings/llvm-snapshot.gpg.key \
+    https://apt.llvm.org/llvm-snapshot.gpg.key
+  echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg.key] \
+https://apt.llvm.org/<series>/ llvm-toolchain-<series>-21 main" \
+    > /etc/apt/sources.list.d/llvm-21.list
+fi
+apt-get update
+# Use the native rustc when it is new enough, else the versioned 1.91 packages.
+native_rustc="$(apt-cache policy rustc 2>/dev/null | awk '/Candidate:/ {print $2}')"
+if [ -n "${native_rustc}" ] && [ "${native_rustc}" != "(none)" ] \
+   && dpkg --compare-versions "${native_rustc}" ge 1.82; then
+  TOOLCHAIN_PACKAGES=(clang-21 llvm-21-dev bindgen rustc rust-src rustfmt)
+  RUSTC_ALTERNATIVE=""
+else
+  TOOLCHAIN_PACKAGES=(clang-21 llvm-21-dev bindgen rustc-1.91 rust-1.91-src rustfmt)
+  RUSTC_ALTERNATIVE="1.91"
+fi
+# <<< toolchain:clang21
+
+apt-get update
+
+echo "[<vendor>-<series>-build] Installing build dependencies..."
+apt-get install -y \
+  build-essential fakeroot \
+  bc bison flex cpio rsync \
+  libssl-dev libelf-dev \
+  libdw-dev \
+  dwarves \
+  git devscripts equivs ubuntu-dev-tools \
+  gnupg \
+  crossbuild-essential-arm64 \
+  crossbuild-essential-armhf \
+  kernel-wedge \
+  debhelper dkms \
+  python3-debian \
+  xmlto \
+  `# initrd part: arm64 chroot via qemu user-mode + binfmt registration` \
+  qemu-user \
+  qemu-user-binfmt \
+  "${TOOLCHAIN_PACKAGES[@]}" \
+  "${EXTRA_PACKAGES[@]}"
+
+# The kernel Makefile uses RUSTC=rustc (unversioned): when the versioned 1.91
+# packages were installed, make them the default.
+if [ -n "${RUSTC_ALTERNATIVE:-}" ]; then
+  echo "[<vendor>-<series>-build] Registering rustc-${RUSTC_ALTERNATIVE} as default rustc..."
+  update-alternatives --install /usr/bin/rustc rustc "/usr/bin/rustc-${RUSTC_ALTERNATIVE}" 191 \
+    --slave /usr/bin/rustfmt rustfmt "/usr/bin/rustfmt-${RUSTC_ALTERNATIVE}" 2>/dev/null || true
+  echo "[<vendor>-<series>-build] rustc: $(rustc --version 2>/dev/null || echo 'not found')"
+fi
+
+# The initrd part runs foreign-arch binaries through qemu user-mode emulation,
+# which needs the binfmt_misc handler registered.
+echo "[<vendor>-<series>-build] Registering qemu binfmt handlers..."
+if [ ! -e /proc/sys/fs/binfmt_misc/register ]; then
+  mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
+fi
+/usr/lib/systemd/systemd-binfmt 2>/dev/null || systemctl restart systemd-binfmt 2>/dev/null || true
+
+echo "[<series>-build] setup-base complete."

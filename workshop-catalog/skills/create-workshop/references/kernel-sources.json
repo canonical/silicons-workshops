@@ -1,0 +1,166 @@
+{
+  "readme": [
+    "Where each vendor's Ubuntu kernel source lives, per Ubuntu series. Read by scripts/c3_lookup.py and scripts/instantiate.py.",
+    "A (vendor, series) pair that is not listed here is never offered. To support a new series or vendor, add a row, then run: python3 scripts/c3_lookup.py vendors",
+    "Every row is checked live against Launchpad on each run, so a wrong or stale row shows up as no-repo / no-tags instead of being trusted.",
+    "",
+    "Vendor fields:",
+    "  display          name shown to the user",
+    "  c3_make          substring of the manufacturer name in the C3 certification database (make__icontains)",
+    "  c3_model_regex   optional; keep only C3 models matching this regex (e.g. drop DGX servers from NVIDIA)",
+    "",
+    "Series row fields (series: focal | jammy | noble | resolute):",
+    "  repo             Launchpad git path, e.g. ~owner/ubuntu/+source/<package>/+git/<series>",
+    "  tag_prefix       release tags are <tag_prefix><version>; the character after the prefix must be a digit",
+    "  flavour          kernel flavour; equals the suffix of the kernel version, e.g. 5.15.0-1041-mtk -> mtk",
+    "  release_source   tag (default) or commit. Use commit only when the repository publishes no release tags",
+    "  branch           required when release_source is commit: the branch whose tip is pinned",
+    "  exclude_tag_regex  optional; tags matching this are ignored when picking the latest release",
+    "  toolchain        optional: none | clang18 | clang21. Overrides the series default (focal/jammy none, noble clang18, resolute clang21)",
+    "  build_validated  {deb, snap}: true only if that kernel build was actually run in a workshop for this row.",
+    "                   The two targets are validated separately: a .deb build says nothing about the Ubuntu Core snap build.",
+    "",
+    "Out of scope for now: NXP i.MX, and the generic x86 kernel (not an EVK)."
+  ],
+  "vendors": {
+    "mediatek": {
+      "display": "MediaTek",
+      "c3_make": "Mediatek",
+      "series": {
+        "jammy": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-mtk/+git/jammy",
+          "tag_prefix": "Ubuntu-mtk-",
+          "flavour": "mtk",
+          "build_validated": {"deb": true, "snap": false}
+        },
+        "noble": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-mtk/+git/noble",
+          "tag_prefix": "Ubuntu-mtk-",
+          "flavour": "mtk",
+          "build_validated": {"deb": true, "snap": false}
+        }
+      }
+    },
+    "qualcomm": {
+      "display": "Qualcomm",
+      "c3_make": "Qualcomm",
+      "series": {
+        "jammy": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-qcom/+git/jammy",
+          "tag_prefix": "Ubuntu-qcom-",
+          "flavour": "qcom",
+          "build_validated": {"deb": false, "snap": false}
+        },
+        "noble": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-qcom/+git/noble",
+          "tag_prefix": "Ubuntu-qcom-",
+          "flavour": "qcom",
+          "exclude_tag_regex": "^Ubuntu-qcom-\\d+\\.\\d+\\.\\d+-3\\d{3}\\.",
+          "note": "ASSUMPTION, not verified: tag Ubuntu-qcom-6.8.0-3001.1 is a separate numbering line with no commit message and would otherwise win 'latest' over 6.8.0-1090.95. Excluded from latest-release selection only; ask the Qualcomm kernel team what the 3xxx line is.",
+          "build_validated": {"deb": true, "snap": false}
+        }
+      }
+    },
+    "renesas": {
+      "display": "Renesas",
+      "c3_make": "Renesas",
+      "series": {
+        "noble": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-renesas/+git/noble",
+          "tag_prefix": "Ubuntu-renesas-",
+          "flavour": "renesas",
+          "toolchain": "clang21",
+          "build_validated": {"deb": false, "snap": false}
+        },
+        "resolute": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-renesas/+git/resolute",
+          "tag_prefix": "Ubuntu-renesas-",
+          "flavour": "renesas",
+          "release_source": "commit",
+          "branch": "main-next",
+          "build_validated": {"deb": true, "snap": false}
+        }
+      }
+    },
+    "xilinx": {
+      "display": "AMD / Xilinx",
+      "c3_make": "AMD AECG",
+      "series": {
+        "focal": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-xilinx-zynqmp/+git/focal",
+          "tag_prefix": "Ubuntu-xilinx-zynqmp-",
+          "flavour": "xilinx-zynqmp",
+          "build_validated": {"deb": false, "snap": false}
+        },
+        "jammy": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-xilinx-zynqmp/+git/jammy",
+          "tag_prefix": "Ubuntu-xilinx-zynqmp-",
+          "flavour": "xilinx-zynqmp",
+          "note": "ZCU104 on 5.15.0-1082: .deb and Ubuntu Core kernel snap (core22) built on 2026-11-04 with manual edits that are now part of the template; not re-run since. Not booted on hardware.",
+          "build_validated": {"deb": true, "snap": true}
+        },
+        "noble": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-xilinx/+git/noble",
+          "tag_prefix": "Ubuntu-xilinx-",
+          "flavour": "xilinx",
+          "build_validated": {"deb": false, "snap": false}
+        }
+      }
+    },
+    "nvidia": {
+      "display": "NVIDIA (Jetson / IGX)",
+      "c3_make": "NVIDIA",
+      "c3_model_regex": "Jetson|IGX|Thor",
+      "series": {
+        "jammy": {
+          "repo": "~nvidia-kernel/nvidia-kernel-private/+git/jammy-linux-nvidia-tegra-igx",
+          "tag_prefix": "Ubuntu-nvidia-tegra-igx-",
+          "flavour": "nvidia-tegra-igx",
+          "build_validated": {"deb": false, "snap": false}
+        },
+        "noble": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-nvidia-tegra/+git/noble",
+          "tag_prefix": "Ubuntu-nvidia-tegra-",
+          "flavour": "nvidia-tegra",
+          "build_validated": {"deb": false, "snap": false}
+        },
+        "resolute": {
+          "repo": "~canonical-kernel/ubuntu/+source/linux-nvidia-tegra/+git/resolute",
+          "tag_prefix": "Ubuntu-nvidia-tegra-",
+          "flavour": "nvidia-tegra",
+          "build_validated": {"deb": false, "snap": false}
+        }
+      }
+    },
+    "raspberry-pi": {
+      "display": "Raspberry Pi",
+      "c3_make": "Raspberry Pi",
+      "series": {
+        "focal": {
+          "repo": "~ubuntu-kernel/ubuntu/+source/linux-raspi/+git/focal",
+          "tag_prefix": "Ubuntu-raspi-",
+          "flavour": "raspi",
+          "build_validated": {"deb": false, "snap": false}
+        },
+        "jammy": {
+          "repo": "~ubuntu-kernel/ubuntu/+source/linux-raspi/+git/jammy",
+          "tag_prefix": "Ubuntu-raspi-",
+          "flavour": "raspi",
+          "build_validated": {"deb": false, "snap": false}
+        },
+        "noble": {
+          "repo": "~ubuntu-kernel/ubuntu/+source/linux-raspi/+git/noble",
+          "tag_prefix": "Ubuntu-raspi-",
+          "flavour": "raspi",
+          "build_validated": {"deb": false, "snap": false}
+        },
+        "resolute": {
+          "repo": "~ubuntu-kernel/ubuntu/+source/linux-raspi/+git/resolute",
+          "tag_prefix": "Ubuntu-raspi-",
+          "flavour": "raspi",
+          "build_validated": {"deb": false, "snap": false}
+        }
+      }
+    }
+  }
+}

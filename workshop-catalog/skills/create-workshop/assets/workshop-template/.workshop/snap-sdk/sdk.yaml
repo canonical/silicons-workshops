@@ -1,0 +1,15 @@
+name: snap-sdk
+version: "0.1"
+summary: <Vendor> Snap Packaging SDK
+description: |
+  Snap Packaging SDK for the <Vendor> Silicon Workshop. Builds the Ubuntu Core
+  kernel snap from the configured kernel source with the Snapcraft Kernel
+  plugin, using the workshop-owned sdk/snap/snapcraft/snapcraft.yaml. → out/snap/
+
+  Public command:
+    kernel-build-snap — build the Ubuntu Core kernel snap → out/snap/
+license: GPL-2.0-only
+
+plugs:
+  ssh-agent:
+    interface: ssh-agent
