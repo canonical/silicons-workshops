@@ -297,6 +297,34 @@ def op_add_packages(ws: Path, packages: list[str]) -> None:
         path.write_text(text[:m.start()] + block + text[m.start():], encoding="utf-8")
 
 
+APT_LOCK_BLOCK = '''
+# Keep background apt jobs away from the build. The container runs
+# unattended-upgrades and the apt-daily timers by default; they take the dpkg
+# lock at an arbitrary time, and a long build then fails with
+# "Could not get lock /var/lib/dpkg/lock-frontend" when snapcraft installs its
+# build packages. Mask them, and make every apt-get wait for the lock instead
+# of failing (DPkg::Lock::Timeout also covers apt-get run later by snapcraft).
+systemctl mask --now apt-daily.timer apt-daily-upgrade.timer \\
+  apt-daily.service apt-daily-upgrade.service unattended-upgrades.service \\
+  >/dev/null 2>&1 || true
+echo 'DPkg::Lock::Timeout "900";' > /etc/apt/apt.conf.d/99-workshop-lock-timeout
+'''
+
+
+def op_guard_apt_lock(ws: Path) -> None:
+    for path in sorted((ws / ".workshop").glob("*-build/hooks/setup-base")):
+        text = path.read_text(encoding="utf-8")
+        if "DPkg::Lock::Timeout" in text and "unattended-upgrades" in text:
+            continue
+        m = re.search(r"(?m)^set -euo pipefail\s*$", text)
+        if not m:
+            raise Stop(f"{path.relative_to(ws)}: no 'set -euo pipefail' line to insert after; edit by hand and use record-fix")
+        # Insert after the EXTRA_PACKAGES array when present, else after set -euo pipefail.
+        arr = re.search(r"(?ms)^EXTRA_PACKAGES=\(.*?^\)\s*$", text)
+        at = arr.end() if arr else m.end()
+        path.write_text(text[:at] + "\n" + APT_LOCK_BLOCK + text[at:], encoding="utf-8")
+
+
 def apply_ops(ws: Path, fix: dict, packages: list[str]) -> None:
     for op in fix.get("ops", []):
         kind = op["op"]
@@ -308,6 +336,8 @@ def apply_ops(ws: Path, fix: dict, packages: list[str]) -> None:
             op_fix_snapcraft(ws, op)
         elif kind == "add-apt-packages":
             op_add_packages(ws, op.get("packages") or packages)
+        elif kind == "guard-apt-lock":
+            op_guard_apt_lock(ws)
         else:
             raise Stop(f"unknown op '{kind}' in known-fixes.json")
 

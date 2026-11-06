@@ -21,6 +21,7 @@
     "  restore-from-template  {files: [..]}  copy the file from assets/workshop-template/ (only files without placeholders)",
     "  fix-snapcraft          {}              build-base, architecture stanza and kernel source path from config/workshop.yaml",
     "  add-apt-packages       {packages: [..]} or, without 'packages', the names captured by the (?P<pkgs>..) group of 'match'",
+    "  guard-apt-lock         {}              insert the unattended-upgrades mask and DPkg::Lock::Timeout block into setup-base when it is missing",
     "",
     "To add an entry: reproduce the failure, put the smallest regex that only the real cause produces, and prefer an op that restores the template over a hand-written edit."
   ],
@@ -45,6 +46,15 @@
       "match": "Could not resolve host|Temporary failure in name resolution|Network is unreachable|Connection timed out|503 Service Unavailable|Service Unavailable",
       "class": "environment",
       "explain": "A network or archive outage. Retry later; this is not a workshop defect."
+    },
+    {
+      "id": "apt-lock-held",
+      "stages": ["check", "launch", "deb", "snap"],
+      "match": "Could not get lock /var/lib/dpkg/lock|Unable to acquire the dpkg frontend lock|apt-lock-unguarded:",
+      "class": "tooling",
+      "explain": "A background apt job (unattended-upgrades or an apt-daily timer) held the dpkg lock and apt-get failed at once. setup-base must mask them and set DPkg::Lock::Timeout.",
+      "ops": [{"op": "guard-apt-lock"}],
+      "restart_from": "launch"
     },
     {
       "id": "launch-pending",

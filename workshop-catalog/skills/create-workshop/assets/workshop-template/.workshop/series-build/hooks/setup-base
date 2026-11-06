@@ -20,6 +20,17 @@ EXTRA_PACKAGES=(
   # @EXTRA-PACKAGES-END
 )
 
+# Keep background apt jobs away from the build. The container runs
+# unattended-upgrades and the apt-daily timers by default; they take the dpkg
+# lock at an arbitrary time, and a long build then fails with
+# "Could not get lock /var/lib/dpkg/lock-frontend" when snapcraft installs its
+# build packages. Mask them, and make every apt-get wait for the lock instead
+# of failing (DPkg::Lock::Timeout also covers apt-get run later by snapcraft).
+systemctl mask --now apt-daily.timer apt-daily-upgrade.timer \
+  apt-daily.service apt-daily-upgrade.service unattended-upgrades.service \
+  >/dev/null 2>&1 || true
+echo 'DPkg::Lock::Timeout "900";' > /etc/apt/apt.conf.d/99-workshop-lock-timeout
+
 # Install snapcraft. On a fresh <series> container snapd may not have finished
 # seeding yet -- retry for up to 5 minutes.
 if ! command -v snapcraft &>/dev/null; then

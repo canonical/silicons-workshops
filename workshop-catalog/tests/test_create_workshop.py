@@ -243,6 +243,18 @@ class ReportRegressionTests(Base):
         self.assertNotRegex(fixed, r"(?m)^architectures:")
         self.assertIn("build-base: core24", fixed)
 
+    def test_apt_lock_guard_is_in_the_hook_and_checked(self):
+        hook = self.ws() / ".workshop/jammy-build/hooks/setup-base"
+        self.assertEqual(self.codes(), set())
+        text = hook.read_text()
+        self.assertIn("DPkg::Lock::Timeout", text)
+        self.assertIn("unattended-upgrades.service", text)
+        # Removing the guard (the 2026-11-05 snap failure) is caught statically.
+        start = text.index("# Keep background apt jobs away")
+        end = text.index("# Install snapcraft.")
+        hook.write_text(text[:start] + text[end:])
+        self.assertIn("apt-lock-unguarded", self.codes())
+
     def test_deb_boot_check_has_no_pipefail_race(self):
         text = (self.ws() / "sdk/deb/lib/validate.sh").read_text()
         self.assertNotRegex(text, r"dpkg-deb -c[^\n]*\|\s*grep")
@@ -410,6 +422,19 @@ class RepairLoopTests(Base):
         self.assertEqual(out["fix"], "clone-transfer-dropped")
         r, out = self.stages("apply-fix", "--workshop", "xilinx-workshop", "--fix", "clone-transfer-dropped")
         self.assertEqual((out["verdict"], out["stop_reason"]), ("stop", "fix-noop"))
+
+    def test_apt_lock_failure_is_repaired_by_inserting_the_guard(self):
+        hook = self.ws() / ".workshop/jammy-build/hooks/setup-base"
+        text = hook.read_text()
+        hook.write_text(text[:text.index("# Keep background apt jobs away")] + text[text.index("# Install snapcraft."):])
+        r, out = self.run_all()
+        self.assertEqual(out["stage"], "check")  # the static check sees it before any build starts
+        self.assertEqual(out["fix"], "apt-lock-held")
+        r, out = self.stages("apply-fix", "--workshop", "xilinx-workshop", "--fix", "apt-lock-held")
+        self.assertEqual(out["files"], [".workshop/jammy-build/hooks/setup-base"])
+        self.assertEqual(hook.read_text().count("DPkg::Lock::Timeout"), 2)  # comment + the setting
+        r, out = self.run_all()
+        self.assertEqual(out["verdict"], "continue", out)
 
     def test_pending_launch_is_a_wait_not_a_relaunch(self):
         self.fake("launch_messages", "error: workshop exists")

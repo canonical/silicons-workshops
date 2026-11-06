@@ -234,6 +234,17 @@ def check_toolchain(ws: Path, f: Findings) -> str:
     return clang[0] if clang else ("no-clang" if packages else "")
 
 
+def check_apt_lock(ws: Path, f: Findings) -> None:
+    """setup-base must keep unattended-upgrades from taking the dpkg lock mid-build."""
+    for p in sorted((ws / ".workshop").glob("*-build/hooks/setup-base")):
+        text = "\n".join(ln for ln in read(p).splitlines() if not ln.lstrip().startswith("#"))
+        rel = p.relative_to(ws).as_posix()
+        if "unattended-upgrades" not in text or "mask" not in text:
+            f.error("apt-lock-unguarded", "setup-base does not mask unattended-upgrades and the apt-daily timers: a background upgrade can hold the dpkg lock and fail a long build", rel)
+        if "DPkg::Lock::Timeout" not in text:
+            f.error("apt-lock-unguarded", "setup-base does not set DPkg::Lock::Timeout: apt-get fails at once when the dpkg lock is held", rel)
+
+
 def check_modes_and_syntax(ws: Path, f: Findings) -> None:
     for pattern in EXECUTABLE_GLOBS:
         for p in sorted(ws.glob(pattern)):
@@ -337,6 +348,7 @@ def run_checks(ws: Path, kernel_src: bool = False) -> Findings:
     check_snapcraft(ws, cfg, f)
     check_pack(ws, f)
     check_toolchain(ws, f)
+    check_apt_lock(ws, f)
     check_modes_and_syntax(ws, f)
     if kernel_src:
         check_kernel_deps(ws, f)
