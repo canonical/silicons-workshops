@@ -1,0 +1,35 @@
+# <Vendor> Silicon Workshop -- <soc> kernel build (Ubuntu <ubuntu-version>)
+# Reproducible build environment for the <Vendor> <evk-board> EVK kernel on
+# Ubuntu <ubuntu-version> <Series>.
+#
+# What to build is declared in config/workshop.yaml (the customization API);
+# how it is built lives in the packaging SDKs under sdk/.
+#
+# Do NOT add top-level `summary:` or `description:` keys: the workshop tool
+# rejects them ("unknown fields"). Keep prose in comments.
+#
+# Public commands (see `actions:` below):
+#   clone-kernel        Clone kernel source -> kernel-src/ (run once)
+#   kernel-build-debs   Debian SDK  -> out/deb/    (built from kernel-src)
+#   kernel-build-snap   Snap SDK    -> out/snap/   (uses Snapcraft Kernel plugin)
+name: <vendor>-<series>
+base: ubuntu@<ubuntu-version>
+
+# Two functional packaging SDKs + one build-host provisioning SDK.
+sdks:
+  - name: project-deb-sdk
+  - name: project-snap-sdk
+  - name: project-<series>-build
+
+actions:
+  clone-kernel: |
+    cd /project
+    bash sdk/common/bin/clone-kernel "$@"
+
+  kernel-build-debs: |
+    cd /project
+    bash sdk/deb/bin/kernel-build-debs "$@"
+
+  kernel-build-snap: |
+    cd /project
+    bash sdk/snap/bin/kernel-build-snap "$@"

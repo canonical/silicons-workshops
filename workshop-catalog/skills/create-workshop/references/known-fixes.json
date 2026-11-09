@@ -1,0 +1,169 @@
+{
+  "readme": [
+    "Error signatures that scripts/run_stages.py recognises, and what to do about them.",
+    "Order matters: the first entry whose 'match' (a Python regex, multiline) hits the end of the stage log wins.",
+    "",
+    "Fields:",
+    "  id            stable name; also the argument of: run_stages.py apply-fix --fix <id>",
+    "  stages        stages this applies to: check | launch | clone | deps | deb | snap | any",
+    "  match         regex searched in the last 400 KB of the stage log",
+    "  class         environment | wait | tooling | kernel",
+    "                environment: not the workshop's fault (network, disk, memory). Stop and report; costs no repair iteration.",
+    "                wait:        an operation is still running. Wait, do not relaunch.",
+    "                tooling:     the workshop's own scripts, hooks or packages. May be repaired when 'ops' is present.",
+    "                kernel:      the kernel source or its patches. NEVER repaired; stop and report to the user.",
+    "  explain       one sentence for the repair log and the final report",
+    "  ops           deterministic edits (only under .workshop/ and sdk/). Absent means: report, do not auto-fix.",
+    "  restart_from  first stage to run again after the edit",
+    "",
+    "ops:",
+    "  delete-top-level-keys  {file: glob, keys: [..]}",
+    "  restore-from-template  {files: [..]}  copy the file from assets/workshop-template/ (only files without placeholders)",
+    "  fix-snapcraft          {}              build-base, architecture stanza and kernel source path from config/workshop.yaml",
+    "  add-apt-packages       {packages: [..]} or, without 'packages', the names captured by the (?P<pkgs>..) group of 'match'",
+    "  guard-apt-lock         {}              insert the unattended-upgrades mask and DPkg::Lock::Timeout block into setup-base when it is missing",
+    "",
+    "To add an entry: reproduce the failure, put the smallest regex that only the real cause produces, and prefer an op that restores the template over a hand-written edit."
+  ],
+  "fixes": [
+    {
+      "id": "disk-full",
+      "stages": ["any"],
+      "match": "No space left on device|ENOSPC|storage pool .* (is )?full",
+      "class": "environment",
+      "explain": "The host or the workshop storage pool is out of disk space (a kernel build needs about 25 GB)."
+    },
+    {
+      "id": "out-of-memory",
+      "stages": ["deb", "snap"],
+      "match": "Cannot allocate memory|Out of memory|oom-kill|^Killed$",
+      "class": "environment",
+      "explain": "The build ran out of memory; give the workshop more RAM or lower the job count."
+    },
+    {
+      "id": "network-unreachable",
+      "stages": ["launch", "clone", "deb", "snap"],
+      "match": "Could not resolve host|Temporary failure in name resolution|Network is unreachable|Connection timed out|503 Service Unavailable|Service Unavailable",
+      "class": "environment",
+      "explain": "A network or archive outage. Retry later; this is not a workshop defect."
+    },
+    {
+      "id": "apt-lock-held",
+      "stages": ["check", "launch", "deb", "snap"],
+      "match": "Could not get lock /var/lib/dpkg/lock|Unable to acquire the dpkg frontend lock|apt-lock-unguarded:",
+      "class": "tooling",
+      "explain": "A background apt job (unattended-upgrades or an apt-daily timer) held the dpkg lock and apt-get failed at once. setup-base must mask them and set DPkg::Lock::Timeout.",
+      "ops": [{"op": "guard-apt-lock"}],
+      "restart_from": "launch"
+    },
+    {
+      "id": "launch-pending",
+      "stages": ["launch"],
+      "match": "workshop exists|workshop \\S+ already exists",
+      "class": "wait",
+      "explain": "A previous launch is still running in the workshop daemon (cancelling the client does not stop it). Wait for it to finish; do not relaunch."
+    },
+    {
+      "id": "definition-unknown-fields",
+      "stages": ["check", "launch"],
+      "match": "unknown fields? .*(summary|description)|definition-unknown-field:",
+      "class": "tooling",
+      "explain": "The installed workshop tool rejects top-level summary:/description: in a workshop definition.",
+      "ops": [{"op": "delete-top-level-keys", "file": ".workshop/*.yaml", "keys": ["summary", "description"]}],
+      "restart_from": "launch"
+    },
+    {
+      "id": "snapcraft-project-dir",
+      "stages": ["check", "snap"],
+      "match": "unrecognized arguments:.*--project-dir|pack-bad-flag:",
+      "class": "tooling",
+      "explain": "snapcraft has no --project-dir option; pack.sh must cd into the project directory.",
+      "ops": [{"op": "restore-from-template", "files": ["sdk/snap/lib/pack.sh"]}],
+      "restart_from": "snap"
+    },
+    {
+      "id": "snapcraft-experimental-plugin",
+      "stages": ["check", "snap"],
+      "match": "Plugin 'kernel'.*(unstable|experimental)|rerun with --enable-experimental-plugins|pack-experimental:",
+      "class": "tooling",
+      "explain": "The kernel plugin is experimental in this snapcraft; pack.sh must pass --enable-experimental-plugins.",
+      "ops": [{"op": "restore-from-template", "files": ["sdk/snap/lib/pack.sh"]}],
+      "restart_from": "snap"
+    },
+    {
+      "id": "snapcraft-yaml-shape",
+      "stages": ["check", "snap"],
+      "match": "union_tag_not_found|'build_base' \\| 'build-base'|build-on architectures .* does not match host|does not match host architecture|snapcraft-(base|build-base|architectures|platforms|build-for|source):",
+      "class": "tooling",
+      "explain": "snapcraft.yaml has the wrong shape for a kernel snap: build-base instead of base, an architecture stanza that matches the Ubuntu Core base, and source pointing at ../../../kernel-src.",
+      "ops": [{"op": "fix-snapcraft"}],
+      "restart_from": "snap"
+    },
+    {
+      "id": "clone-transfer-dropped",
+      "stages": ["clone"],
+      "match": "early EOF|GnuTLS recv error|RPC failed|HTTP/2 stream .* was not closed cleanly|unexpected disconnect",
+      "class": "tooling",
+      "explain": "git.launchpad.net dropped the transfer. The template clones a tag shallowly over HTTP/1.1 with retries; restore that version of source.sh. If it is already current, the network is the cause.",
+      "ops": [{"op": "restore-from-template", "files": ["sdk/common/source.sh"]}],
+      "restart_from": "clone"
+    },
+    {
+      "id": "missing-dwarfdump",
+      "stages": ["deb", "snap"],
+      "match": "dwarfdump: (command )?not found",
+      "class": "tooling",
+      "explain": "Jammy 5.15 kernels need the dwarfdump package, which is separate from dwarves.",
+      "ops": [{"op": "add-apt-packages", "packages": ["dwarfdump"]}],
+      "restart_from": "launch"
+    },
+    {
+      "id": "missing-rust-src",
+      "stages": ["deb", "snap"],
+      "match": "core standard library not found|can't find crate for .core",
+      "class": "tooling",
+      "explain": "Rust kernels need rust-src so that `make rustavailable` finds the core library.",
+      "ops": [{"op": "add-apt-packages", "packages": ["rust-src"]}],
+      "restart_from": "launch"
+    },
+    {
+      "id": "kernel-dep-missing",
+      "stages": ["deps"],
+      "match": "kernel-dep-missing: kernel Build-Depends lists '(?P<pkgs>[^']+)'",
+      "class": "tooling",
+      "explain": "The kernel's own Build-Depends names a toolchain package that the build host does not install.",
+      "ops": [{"op": "add-apt-packages"}],
+      "restart_from": "launch"
+    },
+    {
+      "id": "unmet-build-dependencies",
+      "stages": ["deb", "snap"],
+      "match": "Unmet build dependencies:\\s*(?P<pkgs>.+)",
+      "class": "tooling",
+      "explain": "dpkg-checkbuilddeps reports packages the build host lacks.",
+      "ops": [{"op": "add-apt-packages"}],
+      "restart_from": "launch"
+    },
+    {
+      "id": "kernel-patch-failed",
+      "stages": ["deb", "snap", "clone"],
+      "match": "Patch failed to apply|error: patch failed|Cannot check out (tag|commit|branch)",
+      "class": "kernel",
+      "explain": "A configured patch does not apply, or the configured ref does not exist. That is the kernel or its patches, not the tooling: report it."
+    },
+    {
+      "id": "kernel-config-check",
+      "stages": ["deb", "snap"],
+      "match": "CONFIG_[A-Z0-9_]+ changed from|check-config.*(failed|error)|annotations.*(error|mismatch)",
+      "class": "kernel",
+      "explain": "The kernel's config annotations disagree with the generated config. That is a kernel tree issue (see references/toolchain-notes.md); report it, do not edit the tree."
+    },
+    {
+      "id": "kernel-compile-error",
+      "stages": ["deb", "snap"],
+      "match": "(^|\\s)(\\.{0,2}/)?(arch|drivers|fs|kernel|mm|net|sound|lib|include|security|crypto|ubuntu|init|block|rust)/[\\w/.+-]+:\\d+(:\\d+)?: (fatal )?error:",
+      "class": "kernel",
+      "explain": "The kernel's own code failed to compile. That is the kernel source, not the tooling: report it with the log."
+    }
+  ]
+}

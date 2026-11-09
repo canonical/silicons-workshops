@@ -1,80 +1,74 @@
 # Silicon Workshops
 
-Toolkit for creating reproducible Ubuntu kernel build environments for silicon
-partners, using GitHub Copilot and the [`workshop`](https://snapcraft.io/workshop)
-tool.
+Reproducible Ubuntu kernel build environments for silicon partners, built with
+the [`workshop`](https://snapcraft.io/workshop) tool.
 
 ## What's included
 
 | Path | Purpose |
 |------|---------|
-| `workshop-template/` | Silicon-agnostic scaffold — copied into your project by `init` |
-| `workshop-catalog/init` | One-shot installer script |
-| `workshop-catalog/skills/` | Copilot skills installed into your project |
-| `docs/` | Skill specifications |
+| `workshop-catalog/skills/create-workshop/` | Agent skill that creates a new Silicon Workshop. Self-contained: `SKILL.md`, `scripts/`, `references/` and the workshop template under `assets/`. |
+| `docs/` | Skill specification |
+| `renesas/`, `qualcomm/`, `xilinx/` | Vendor workshops |
 
 ## Requirements
 
-- [GitHub Copilot](https://github.com/features/copilot) in VS Code (Agent mode)
-- [`workshop` snap](https://snapcraft.io/workshop): `sudo snap install workshop --classic`
-- Git
+- Node.js 18+ (for `npx skills`), `python3` and `git`
+- [`workshop` snap](https://snapcraft.io/workshop) to build: `sudo snap install workshop --classic`
+- A skills-compatible coding agent (VS Code with GitHub Copilot, Claude Code, Codex, ...)
+- Network access to `certification.canonical.com` and `launchpad.net`
 
----
+## Install the skill
 
-## Installation
-
-Clone this repository once on your machine:
-
-```bash
-git clone https://github.com/canonical/silicons-workshops ~/silicons-workshops
-```
-
-Then run `init` from any project directory where you want to manage Silicon Workshops:
+From your project directory, with the [skills CLI](https://github.com/vercel-labs/skills):
 
 ```bash
-cd /path/to/your/project
-~/silicons-workshops/workshop-catalog/init
+npx skills add canonical/silicons-workshops --skill create-workshop
 ```
 
-`init` will:
-1. Copy `workshop-template/` into your project
-2. Install all Copilot skills into `.github/skills/`
-3. Create `catalog.yaml` if it doesn't exist
+Pick the agents you use when prompted, or name them: `-a github-copilot claude-code codex`.
+Avoid `--agent '*'`: it creates a directory for every supported agent in your project.
 
-**Running `init` again is safe** — it skips files that are already present.
+The CLI copies the whole skill folder into your agent's skills directory
+(for example `.agents/skills/` and `.claude/skills/`; VS Code reads both). Nothing
+else is installed.
 
----
+## Use the skill
 
-## Creating your first workshop
+In VS Code, open the project in the chat panel in Agent mode and type `/create-workshop`,
+or describe the task ("create a workshop for the MediaTek Genio 510 EVK"); the skill's
+trigger phrases load it automatically. For other agents, see how your agent
+invokes a skill from its skills directory.
 
-Open your project in VS Code with GitHub Copilot enabled and type in the
-Copilot chat panel (Agent mode):
+The skill asks, in order:
 
-```
-create-workshop
-```
+1. **Vendor**: vendors with certified EVKs in the Canonical Certification (C3) database
+   and a buildable kernel source.
+2. **EVK**: the certified boards for that vendor, with the kernel C3 certified them on.
+3. **Ubuntu release**: the certified release first, marked `(certified)`. Other
+   releases with a kernel source are offered as customizations and flagged as such.
 
-The skill guides you through three steps:
+It then generates `<vendor>-workshop/` in your project from the bundled template
+(one deterministic script: substitution, toolchain for the series, snap definition,
+static checks) and registers the workshop in `catalog.yaml`. The kernel ref is pinned
+automatically: the certified kernel's tag, or the latest release tag, or a commit for
+repositories that publish no tags.
 
-**Step 1 — Vendor**: lists silicon vendors that have both a public Canonical
-kernel on Launchpad *and* Ubuntu-certified IoT devices. Only vendors passing
-both checks are shown.
+If you ask for the build, the skill then launches the workshop, clones the kernel and
+builds the `.deb` packages and the Ubuntu Core kernel snap. When a stage fails it
+repairs the **tooling** (build scripts, hooks, packages) and tries again, for at most
+5 repair iterations. It never edits the kernel tree, patches, the kernel ref or
+`config/workshop.yaml`; a kernel error, a network or disk failure, or the same failure
+twice stops the run with a report (`HANDOFF.md`, `REPAIR-LOG.md`).
 
-**Step 2 — Ubuntu release**: lists available series (`jammy`, `noble`,
-`resolute`) for the selected vendor's kernel repository.
+To target something the skill does not offer (your own kernel repository, an EVK not
+in C3), ask for it: the skill asks you for the repository, ref, flavour and series.
 
-**Step 3 — EVK**: lists Ubuntu-certified IoT devices for that vendor.
+See [`docs/create-workshop-skill.md`](docs/create-workshop-skill.md) for the full specification.
 
-After confirmation the skill:
-- Resolves the latest kernel release tag from Launchpad automatically
-- Copies `workshop-template/` to `<vendor>-workshop/`
-- Substitutes all placeholder values
-- Generates `sdk/snap/snapcraft/snapcraft.yaml`
-- Registers the workshop in `catalog.yaml`
+## Build with the new workshop
 
----
-
-## Launching a workshop
+The skill can do this for you. By hand:
 
 ```bash
 cd <vendor>-workshop/
@@ -89,27 +83,12 @@ workshop run <vendor>-<series> -- kernel-build-debs
 workshop run <vendor>-<series> -- kernel-build-snap
 ```
 
-Built artefacts land in `out/deb/` and `out/snap/` respectively.
+Artefacts land in `out/deb/` and `out/snap/`.
 
----
-
-## Skill installed by `init`
-
-| Skill | Purpose |
-|-------|---------|
-| `create-workshop` | Guided wizard — vendor / release / EVK → ready-to-launch workshop |
-
-See [`docs/create-workshop-skill.md`](docs/create-workshop-skill.md) for the
-full `create-workshop` skill specification.
-
----
-
-## Updating
+## Update the skill
 
 ```bash
-cd ~/silicons-workshops && git pull
-cd /path/to/your/project && ~/silicons-workshops/workshop-catalog/init
+npx skills update create-workshop
 ```
 
-`init` will update the skill files but will not overwrite your existing
-workshops or `catalog.yaml`.
+Your existing `<vendor>-workshop/` directories are not touched.

@@ -1,0 +1,21 @@
+# Runtime state (created by the workshop; never committed).
+cache/
+build/
+out/
+kernel-src/
+gadget-src/
+.workshop.lock
+
+# Snapcraft working directories, created inside sdk/snap/snapcraft/ by
+# `snapcraft pack --destructive-mode` (owned by the container's root mapping).
+sdk/snap/snapcraft/parts/
+sdk/snap/snapcraft/stage/
+sdk/snap/snapcraft/prime/
+sdk/snap/snapcraft/overlay/
+*.snap
+
+# Repair log written by the create-workshop skill (run_stages.py).
+.repair/
+
+# Optional local GPG signing key (if you ever add signed builds).
+config/gpg-signing-key.asc

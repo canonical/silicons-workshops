@@ -1,461 +1,264 @@
 ---
 name: create-workshop
 description: >
-  Create a new Silicon Workshop from the workshop-catalog template for a
-  specific silicon family. Copies workshop-template/, substitutes all
-  placeholder values, generates the Snapcraft Kernel plugin snapcraft.yaml,
-  and registers the new workshop in catalog.yaml. Use when creating a new
-  silicon workshop (e.g. for MediaTek, Qualcomm, NXP, or another vendor).
-allowed-tools: Bash(*), EditFile(*), CreateFile(*), ReadFile(*)
-license: MIT
+  Create a Silicon Workshop for a silicon vendor and EVK, then build the kernel
+  in it and repair the tooling until the build works. Selects the vendor, the
+  certified EVK, the Ubuntu release and the kernel ref from the Canonical
+  Certification (C3) database and live Launchpad sources, or accepts a custom
+  target. Generates the workshop from a bundled template, runs the staged
+  build (launch, clone, Debian packages, Ubuntu Core kernel snap) and fixes
+  tooling failures within a fixed budget, never the kernel or its patches.
+  Ends with a handoff report.
+  WHEN: create workshop, new silicon workshop, add workshop, create kernel
+  workshop, build kernel for EVK, build kernel for board, set up kernel build
+  environment, new vendor workshop, create BSP workshop, add EVK workshop,
+  create workshop for mediatek, create workshop for qualcomm, create workshop
+  for renesas, create workshop for xilinx, repair kernel build workshop,
+  workshop launch fails, kernel snap build fails, custom kernel target.
+license: Apache-2.0
+metadata:
+  author: Canonical
+  version: "2.0.0"
+  summary: >
+    Creates a Silicon Workshop for a vendor, EVK and Ubuntu release, builds the
+    kernel in it, and repairs tooling failures within a bounded budget.
+  tags:
+    - silicon
+    - kernel
+    - workshop
+    - ubuntu
+    - bsp
+compatibility: python3 and git. Building also needs the workshop snap (LXD) and about 25 GB of disk.
+allowed-tools: python3 git workshop
 ---
 
-# create-workshop — Silicon Workshop creation skill
+# create-workshop
 
-## Purpose
+Takes the user from "I want a kernel build environment for this board" to a
+working workshop and built kernel packages, with as little back-and-forth as
+possible, and stops honestly when it cannot get there.
 
-Instantiate a new conformant Silicon Workshop from `workshop-template/` in the
-`workshop_catalog`. The result is a ready-to-launch workshop directory with all
-silicon-specific values substituted, a valid `snapcraft.yaml` using the
-Snapcraft Kernel plugin, and an updated `catalog.yaml`.
+Paths in this skill (`scripts/`, `references/`, `assets/`) are relative to the
+directory containing this `SKILL.md`. The user's project directory is where the
+workshop is created and where commands run.
 
----
+## Rules that never bend
 
-## Guided Selection — Ask the user in sequence
+1. **Never edit the kernel tree, patches, the kernel ref or `config/workshop.yaml`
+   to make a build pass.** Repair is for tooling only: `.workshop/`, `sdk/`,
+   `.gitignore`. A kernel compile error is reported, not fixed.
+2. **At most 5 repair iterations** per workshop. `scripts/run_stages.py`
+   enforces it, and stops on the same failure twice, on network or disk
+   failures, and on anything that points into the kernel.
+3. **Never answer "not supported" from a failed lookup.** If a script exits
+   non-zero, say the check failed and stop. Never guess a list.
+4. **Never embed credentials** in a URL. Private repositories use `git+ssh://`
+   and the user's ssh-agent.
+5. **Never modify the bundled `assets/workshop-template/`** or another workshop.
+6. **Never claim a build is certified or validated** beyond what the data says.
 
-Do NOT ask for all inputs at once. Follow the three-step guided flow below to
-collect only what is valid. Reject requests for silicon that is not in the
-supported catalog.
+## Overview
 
----
-
-### Step A: Select silicon vendor
-
-**ALWAYS fetch live data — never rely on a cached list.** The catalog changes
-as new silicon is added.
-
-**Before presenting the vendor list**, perform a full three-step validation
-for every candidate vendor — do NOT show a vendor until all three conditions
-are confirmed:
-
-1. A `linux-<vendor>` source repository exists in `~canonical-kernel` on Launchpad
-2. At least one Ubuntu series branch exists in that repository
-3. At least one certified IoT device exists on `ubuntu.com/certified/iot?q=<vendor>`
-
-Only vendors that pass **all three checks** appear in the Step A list. Never
-present a vendor that will dead-end at Step B (no releases) or Step C (no
-certified devices).
-
-```
-For each candidate vendor (renesas, qcom→qualcomm, mtk→mediatek, xilinx, etc.):
-  Fetch: https://code.launchpad.net/~canonical-kernel/ubuntu/+source/linux-<pkg>/+git
-         → confirms kernel exists and lists available series
-  Fetch: https://ubuntu.com/certified/iot?q=<vendor-search-term>
-         → confirms at least one certified device exists
-  Include in Step A list only if BOTH fetches return results.
-```
-
-Present the cross-referenced list to the user. If the user requests a vendor
-not in the list:
-> "There is no public Canonical kernel for `<vendor>` in `~canonical-kernel`
-> on Launchpad and/or no certified IoT device on ubuntu.com/certified/iot.
-> A workshop can only be created for silicon with both. Currently supported:
-> [list from live fetch]"
-
-Stop — do not proceed.
-
----
-
-### Step B: Select Ubuntu release
-
-**Fetch live** from Launchpad the list of series (git branches) available for
-the selected vendor's kernel package:
-
-```
-Fetch: https://code.launchpad.net/~canonical-kernel/ubuntu/+source/linux-<pkg>/+git
-       (list all branch URLs — each branch name IS the series, e.g. noble, jammy, resolute)
-```
-
-Present only the series that have a kernel repository. Ask the user to select one.
+| Phase | What happens | How |
+|---|---|---|
+| 1. Select | vendor, EVK, Ubuntu release, kernel ref | `scripts/c3_lookup.py`, then ask |
+| 2. Generate | workshop directory and `catalog.yaml` entry | `scripts/instantiate.py` |
+| 3. Build and repair | launch, clone, `.deb`, snap, bounded repair | `scripts/run_stages.py` |
+| 4. Report | what was built, what was repaired, what is unproven | handoff report |
 
 ---
 
-### Step C: Select EVK (certified device)
+## Phase 1: Select
 
-**Fetch live** from the Ubuntu certified IoT catalog filtered by vendor:
+Ask in sequence, never all at once. The reference is C3. The **default** is an
+EVK that C3 certified, on the Ubuntu release and kernel it was certified on.
+The user may deviate, but must be told when they do.
 
+All lookups use public APIs (C3 and Launchpad), need only `python3`, and print
+JSON. Where each vendor's kernel lives is data in `references/kernel-sources.json`;
+never invent a repository URL or tag prefix.
+
+**If a script exits non-zero**, say so and stop (rule 3).
+
+### Step A: vendor
+
+```bash
+python3 scripts/c3_lookup.py vendors
 ```
-Fetch: https://ubuntu.com/certified/iot?q=<vendor-name>
-       (extract device names from the results table)
+
+Offer only `offerable: true` vendors, with the certified-EVK count. A series
+with `state: private` (for example NVIDIA jammy) needs Launchpad access: ask
+before re-running with `--ssh` (read-only `git ls-remote` with the user's own
+key). For a vendor that is not offered, say why and offer the custom target.
+
+### Step B: EVK
+
+```bash
+python3 scripts/c3_lookup.py evks --vendor <vendor>
 ```
 
-Present the list of certified EVK/board names and ask the user to select one.
-Map the selected device name to a normalized `evk_board` identifier
-(lowercase, hyphen-separated, e.g. `Genio 1200 EVK` → `genio-1200-evk`).
+One row per (EVK, series): `model`, `series`, `level`, `kernel_version` (what
+C3 certified), `series_in_table`. Show model, certified series and kernel, and
+ask. Normalize the model to `evk_board` (`Genio 510 EVK` -> `genio-510-evk`).
+Mention `unmapped_releases` as unavailable. C3 labels can contradict the
+certified kernel (a board labelled 24.04 certified on 5.15): show both.
 
-If the certified page does not list releases per device, use the series
-selected in Step B to determine the EVK is valid for that release.
+### Step C: Ubuntu release
 
----
+```bash
+python3 scripts/c3_lookup.py series --vendor <vendor> --evk "<model exactly as in Step B>" [--ssh]
+```
 
-### Step D: Confirm and collect remaining inputs
+Offer the entries with `buildable: true`, certified first, with the ref:
 
-After the three guided steps, confirm the selection with the user:
+```text
+Which Ubuntu release?
+  1. jammy (certified)   Ubuntu-mtk-5.15.0-1038.45
+  2. noble               Ubuntu-mtk-6.8.0-1007.7
+```
 
-> "Creating a workshop for:
-> - Vendor: **Qualcomm** (`linux-qcom`)
-> - Release: **noble** (24.04, core24)
-> - EVK: **Dragonwing IQ-9075 EVK** (`iq-9075-evk`)
->
-> Is this correct? (yes/no)"
+1. Certified and `ref_is_certified_pin`: label `(certified)`, show `ref.label`.
+2. Certified, not pinned: label `(certified series)` and tell the user the
+   `pin_note`: the ref offered is NOT the kernel C3 certified. Say plainly what
+   C3 certified (for example 5.4) and what will be built (for example 5.15).
+3. Not certified: a customization. Say C3 did not certify this EVK on that
+   release; support there is not validated. Proceed once they confirm.
+4. `build_validated`: has `deb` and `snap`, separately. For any `false`, say that
+   target has not been built in a workshop for this vendor and release.
+   `table_note`, when present, is evidence or a caveat: show it.
+5. `state: private`: not offered; explain and offer `--ssh`.
+6. `state: error`: the check failed, so the answer is UNKNOWN; list it as
+   `<series> (could not check Launchpad)`.
+7. `no-repo`, `no-tags`, `no-branch`: leave out. If it is the certified series,
+   say "C3 certified `<EVK>` on `<series>`, but this skill has no buildable
+   kernel source for it", and show the alternatives.
 
-If confirmed, the remaining inputs are either known from the catalog below or
-need to be resolved (kernel tag via Launchpad step 1b). Do not ask the user
-for values that can be derived from the selection.
+The chosen entry's `ref.type` and `ref.value` are the kernel ref (`commit` for
+repositories with no release tags, such as Renesas resolute).
 
-**Derived values from selection** (do not ask the user):
+### Custom target
+
+When the user wants something not offered, ask for: vendor, SoC, board, series
+(focal, jammy, noble, resolute), kernel repository URL, kernel ref (tag or
+commit; a branch only if they insist), and kernel flavour. Validate what can be:
+`git ls-remote <repo> <ref>` (repository UNVERIFIED if it cannot run, not
+invalid); the credential rule. The flavour and the toolchain cannot be checked
+before the clone: the `deps` stage compares the kernel's own Build-Depends with
+the build host after `clone-kernel` and repairs gaps. Custom targets are the
+case the repair loop exists for. Then continue as below, with every
+`build_validated` treated as false.
+
+### Step D: confirm, derive, and ask about the build
+
+Confirm vendor, EVK, release and ref, with every customization or unvalidated
+note. Ask in the same message whether to **build now** (one build is about an
+hour and needs about 25 GB; `.deb` and snap are separate builds). Derive the
+rest without asking:
 
 | Input | How to derive |
 |-------|--------------|
-| `vendor` | from Step A |
-| `Vendor` | display name from Step A |
-| `kernel_pkg_name` | from vendor table in Step A |
-| `kernel_repo` | `https://git.launchpad.net/~canonical-kernel/ubuntu/+source/<pkg>/+git/<series>` |
-| `kernel_flavour` | `renesas`, `qcom`, `mtk`, `xilinx` (matches `--flavour` in the kernel tree) |
-| `toolchain_arch` | `arm64` (all currently supported EVKs) |
-| `core_base` | `core22` for jammy, `core24` for noble, `core26` for resolute |
-| `ubuntu_release` | from Step B |
-| `evk_board` | from Step C |
-| `soc` | derive from EVK name (e.g. `iq-9075-evk` → `qcs9075`) |
-| `soc_families` | use the silicon family group (e.g. `qcs9075, sa8775p`) |
-| `clang_version` | `18` for noble (Qualcomm/MediaTek/Xilinx), `21` for resolute (Renesas) |
-| `kernel_ref` | resolve from Launchpad (step 1b) — latest release tag |
+| `vendor`, `vendor-display` | vendor key and `display` from Step A |
+| `evk-board` | Step B |
+| `soc` | from the model if it names a SoC family (`Genio 510 EVK` -> `genio-510`), else ask. Lowercase letters, digits, hyphens (`RZ/G2L EVKIT` -> `rz-g2l`) |
+| `soc-families` | `soc`, unless the user lists more |
+| `ubuntu-release` | series from Step C |
+| `kernel-repo` | `repo_url` from Step C |
+| `ref-type`, `ref` | `ref.type`, `ref.value` from Step C |
+| `flavour` | `flavour` from Step C |
+| `toolchain` | omit; the table row or the series decides. Pass `--toolchain` only for a custom target the user says needs it |
 
 ---
 
-## Required Inputs
+## Phase 2: Generate
 
-The following are now fully derived from the guided selection. They are listed
-here for reference and override — the user should not normally need to provide
-them manually.
+One command; do not copy, substitute or rename by hand:
 
-| Input | Description | Example |
-|-------|-------------|---------|
-| `vendor` | Silicon vendor identifier (lowercase, kebab-safe) | `mediatek` |
-| `Vendor` | Display name for the vendor | `MediaTek` |
-| `soc` | SoC family identifier | `genio-1200` |
-| `evk_board` | Reference EVK board name | `genio-1200-evk` |
-| `ubuntu_release` | Ubuntu release name(s) (space-separated if multiple) | `noble` |
-| `core_base` | Ubuntu Core snap base | `core24` (noble) or `core26` (resolute) |
-| `kernel_repo` | Kernel source git URL | `https://git.launchpad.net/~canonical-hwe-private/ubuntu/+source/linux-mtk/+git/noble` |
-| `kernel_ref` | Release tag for the kernel. **Always use a tag, never `main` or `master`.** The skill will look this up automatically from Launchpad if not provided. | `Ubuntu-qcom-6.8.0-1080.85` |
-| `kernel_flavour` | Ubuntu kernel config flavour | `mtk` |
-| `toolchain_arch` | Target architecture | `arm64` |
-| `soc_families` | All SoC families this workshop supports (comma-separated) | `genio-700, genio-1200` |
-| `kernel_pkg_name` | Kernel snap/deb package base name (from the Launchpad repo name, e.g. `linux-qcom` not `linux-qualcomm`) | `linux-qcom`, `linux-mtk`, `linux-renesas` |
-| `clang_version` | clang version required by kernel Build-Depends | `21` (Renesas/resolute), `18` (Qualcomm/noble, MediaTek/noble, MediaTek/jammy) |
-| `rust_src_pkg` | rust-src package name | `rust-src` (default), `rust-1.91-src` (if versioned) |
+```bash
+python3 scripts/instantiate.py --vendor <vendor> --vendor-display "<Vendor>" \
+  --soc <soc> --evk-board <evk-board> --ubuntu-release <series> \
+  --kernel-repo <url> --ref-type <tag|commit> --ref <ref> --flavour <flavour> \
+  [--soc-families a,b] [--toolchain none|clang18|clang21]
+```
 
-**Credential check:** If `kernel_repo` contains a `username:token@` or
-`user:password@` pattern, reject it immediately with:
-> Error: Credentials must never be embedded in the kernel repository URL.
-> Use a git+ssh:// URL for private repositories. Authentication is supplied
-> at runtime via ssh-agent.
+It copies the bundled template, substitutes every placeholder, renames the
+dispatch files, keeps the toolchain block for the series, renders the
+`snapcraft.yaml` for the Ubuntu Core base, runs `scripts/check_workshop.py`,
+and appends the `catalog.yaml` entry. It refuses credentials in the URL. On
+failure it keeps nothing and prints why: that is a template bug, so report it
+with the message instead of patching around it.
 
-A `git+ssh://` URL without embedded credentials is accepted.
+The output JSON has `workshop_dir` and `workshop_name`. If the user does not
+want a build, stop here and give the next steps:
+
+```text
+cd <workshop_dir>
+workshop launch <workshop_name>
+workshop run <workshop_name> -- clone-kernel
+workshop run <workshop_name> -- kernel-build-debs
+workshop run <workshop_name> -- kernel-build-snap
+```
+
+`workshop` needs the project directory (`<workshop_dir>`) as the current
+directory or `-p <dir>`; otherwise it prints "not a project".
 
 ---
 
-## Steps
-
-### 1. Determine workshop directory name
-
-The new workshop directory is `<vendor>-workshop/` at the catalog root.
-If a directory with that name already exists, append a qualifier:
-`<vendor>-<soc>-workshop/`.
-
-Announce: "Creating `<vendor>-workshop/` from `workshop-template/`."
-
-### 1b. Resolve the kernel release tag from Launchpad
-
-**Skip this step if the user provided an explicit `kernel_repo` URL and a
-specific `kernel_ref` tag (e.g. `Ubuntu-qcom-6.8.0-1080.85`).** Only
-resolve automatically when:
-- `kernel_ref` was not provided, OR
-- `kernel_ref` is a branch name (`main`, `master`, `main-next`, etc.)
-
-If the user provided their own fork or a custom URL with a specific commit or
-tag, use those values as-is and skip to step 2.
-
-All Canonical Ubuntu kernel repositories follow this pattern:
-```
-https://code.launchpad.net/~canonical-kernel/ubuntu/+source/<pkg>/+git/<series>
-```
-For example:
-- Qualcomm Noble: `https://code.launchpad.net/~canonical-kernel/ubuntu/+source/linux-qcom/+git/noble`
-- MediaTek Noble: `https://code.launchpad.net/~canonical-kernel/ubuntu/+source/linux-mtk/+git/noble`
-- Renesas Resolute: `https://code.launchpad.net/~canonical-kernel/ubuntu/+source/linux-renesas/+git/resolute`
-- AMD/Xilinx Noble: `https://code.launchpad.net/~canonical-kernel/ubuntu/+source/linux-xilinx/+git/noble`
-
-**To find the latest release tag:**
-
-Fetch the Launchpad page for the kernel repository and look for the most
-recent tag starting with `Ubuntu-<flavour>-`. This is shown as the "Last
-commit for master" description on the Launchpad git page.
+## Phase 3: Build and repair
 
 ```bash
-# Example: fetch the Launchpad page and extract the latest tag
-curl -s "https://code.launchpad.net/~canonical-kernel/ubuntu/+source/linux-<pkg>/+git/<series>" \
-  | grep -o 'Ubuntu-[a-z]*-[0-9][^"]*' | head -1
+python3 scripts/run_stages.py run --workshop <workshop_dir>
 ```
 
-Alternatively, use git to list tags directly:
-```bash
-git ls-remote --tags "https://git.launchpad.net/~canonical-kernel/ubuntu/+source/linux-<pkg>/+git/<series>" \
-  | grep -o 'Ubuntu-[^}]*$' | sort -V | tail -1
-```
+Run it in a background terminal and wait: a build prints a heartbeat every two
+minutes and logs to `<workshop_dir>/.repair/logs/`. Stages run in order and
+finished ones are skipped: `check` (static), `launch`, `clone`, `deps` (kernel
+Build-Depends against the build host), `deb`, `snap`. Use `--stages deb` to
+build only one target.
 
-Set `kernel_ref` to the resolved tag (e.g. `Ubuntu-qcom-6.8.0-1080.85`).
-Set `kernel_ref_type` to `tag`.
+It stops at the first failure and prints a verdict. Act on it:
 
-**Why this matters:** Moving branches (`master`, `main`) can introduce new
-kernel flavour variants, toolchain requirements, or `check-config` policy
-failures at any time. A pinned release tag is always buildable and matches
-a specific Ubuntu image release.
+| verdict | meaning | do |
+|---|---|---|
+| `continue` | every requested stage passed | go to Phase 4 |
+| `fix-available` | a known tooling fix matches | run the `next` command (`apply-fix`), then `run` again |
+| `diagnose` | unknown failure | read the log tail, find a **tooling** cause, edit only `.workshop/` or `sdk/`, then `record-fix --note "<cause and change>"`, then `run` again |
+| `wait` | an earlier operation is still running | wait, then `run` again; never relaunch |
+| `stop` | environment, kernel/patch, repeated failure, or budget used | go to Phase 4 with an escalation report |
 
-### 2. Copy the template
+Read `references/repair.md` before the first `diagnose` or `stop`. It has the
+scope, what counts as tooling, how to write the note, and the report format.
+`references/known-fixes.json` lists the signatures the script recognises.
 
-Copy `workshop-template/` to `<vendor>-workshop/` at the catalog root.
-Do NOT copy `.git/` if present.
-
-```bash
-cp -r workshop-template/ <vendor>-workshop/
-```
-
-### 3. Substitute all `<placeholder>` tokens
-
-In the following files, replace every `<placeholder>` token with the
-corresponding input value. Use exact case as shown below.
-
-**`config/workshop.yaml`**
-
-| Placeholder         | Replace with              |
-|---------------------|---------------------------|
-| `<vendor>`          | `vendor` input            |
-| `<soc>`             | `soc` input               |
-| `<evk-board>`       | `evk_board` input         |
-| `<ubuntu-release>`  | `ubuntu_release` input    |
-| `<core-base>`       | `core_base` input         |
-| `<kernel-repo-url>` | `kernel_repo` input                              |
-| `<kernel-ref>`      | `kernel_ref` input (resolved tag from step 1b)   |
-| `<kernel-flavour>`  | `kernel_flavour` input                           |
-| `<series>`          | Ubuntu series from Step B (e.g. `jammy`, `noble`) |
-| `<Series>`          | Capitalised series (e.g. `Jammy`, `Noble`)        |
-| `<ubuntu-version>`  | Ubuntu version from Step B (e.g. `22.04`, `24.04`) |
-| `<toolchain-arch>`  | `toolchain_arch` input    |
-
-**`.workshop/vendor-noble.yaml` and `.workshop/vendor-resolute.yaml`**
-
-| Placeholder    | Replace with   |
-|----------------|----------------|
-| `<vendor>`     | `vendor` input |
-| `<Vendor>`     | `Vendor` input |
-| `<soc>`        | `soc` input    |
-| `<evk-board>`  | `evk_board` input |
-
-After substitution, no `<placeholder>` token should remain in any of these files.
-Run a final check:
-```bash
-grep -r '<[a-z]' <vendor>-workshop/config/ <vendor>-workshop/.workshop/*.yaml \
-  | grep -v '^.*#' || echo "No remaining placeholders"
-```
-
-If any unsubstituted placeholders remain, report them and stop.
-
-### 4. Rename and update workshop dispatch files
-
-The template ships a single generic dispatch file `vendor-series.yaml` and a
-`series-build/` provisioning SDK directory. Substitute the `<series>` and
-`<ubuntu-version>` placeholders with the values for the selected release.
-
-**Map Ubuntu release → substitution values:**
-
-| Ubuntu release | `<series>` | `<Series>` | `<ubuntu-version>` |
-|---------------|------------|------------|---------------------|
-| jammy (22.04) | `jammy` | `Jammy` | `22.04` |
-| noble (24.04) | `noble` | `Noble` | `24.04` |
-| resolute (26.04) | `resolute` | `Resolute` | `26.04` |
-
-Steps:
-1. Rename `vendor-series.yaml` → `<vendor>-<series>.yaml`
-2. In the renamed file, replace all `<series>`, `<Series>`, `<ubuntu-version>` tokens
-3. Rename `series-build/` → `<series>-build/`
-4. In all files under `<series>-build/`, replace `<series>`, `<Series>`, `<ubuntu-version>` tokens
-
-### 5. Generate `sdk/snap/snapcraft/snapcraft.yaml`
-
-Replace the placeholder values in `sdk/snap/snapcraft/snapcraft.yaml` using
-the config-to-snapcraft mapping:
-
-| Placeholder            | Replace with                                        |
-|------------------------|-----------------------------------------------------|
-| `linux-<vendor>-<soc>` | `kernel_pkg_name` input (e.g. `linux-qcom`)        |
-| `<Vendor>`             | `Vendor` input                                      |
-| `<soc>`                | `soc` input                     |
-| `<evk-board>`          | `evk_board` input               |
-| `<core-base>`          | `core_base` input               |
-| `<toolchain-arch>:`    | `toolchain_arch` input + `:`    |
-| `<kernel-flavour>`     | `kernel_flavour` input          |
-
-The resulting `snapcraft.yaml` must contain:
-- `plugin: kernel`
-- `kernel-ubuntu-debian-package: true`
-- `kernel-ubuntu-kconfigflavour: <kernel_flavour>`
-- `base: <core_base>`
-
-Verify current Snapcraft Kernel plugin documentation before modifying keys:
-https://documentation.ubuntu.com/snapcraft/latest/reference/plugins/kernel_plugin/
-
-### 6. Validate — no credentials in config
-
-Re-read `config/workshop.yaml`. If `kernel.repository` contains a `:`
-followed by non-empty text before a `@` character (credential pattern), reject
-with the error from step 1.
-
-A `git+ssh://` URL is explicitly permitted.
-
-### 7. Register in catalog.yaml
-
-If `catalog.yaml` does not exist at the catalog root, create it first:
-
-```yaml
-# Silicon Workshop Catalog
-# Machine-readable index for the BSP agent to discover and select workshops.
-# Add a new entry here each time you create a workshop with create-workshop.
-
-schema_version: 1
-
-workshops:
-```
-
-Then append a new entry:
-
-```yaml
-  - name: <vendor>-workshop
-    vendor: <vendor>
-    soc_families:
-      - <soc>                # add additional soc_families if provided
-    evk: <evk_board>
-    path: <vendor>-workshop/
-    ubuntu_releases:
-      - <ubuntu_release>
-```
-
-### 8. Print next steps
-
-Report what was created and print the following next steps for the user:
-
-```
-Workshop created: <vendor>-workshop/
-
-Next steps:
-  1. Review config/workshop.yaml — verify all values are correct.
-  2. If the kernel repository is private, ensure your ssh-agent has the
-     appropriate key loaded before cloning.
-  3. Launch the workshop:
-       workshop launch <vendor>-<release>
-  4. Clone the kernel source (run once):
-       workshop run <vendor>-<release> -- clone-kernel
-  5. Build Debian packages (Ubuntu Classic target):
-       workshop run <vendor>-<release> -- kernel-build-debs
-  6. Build kernel snap (Ubuntu Core target):
-       workshop run <vendor>-<release> -- kernel-build-snap
-  7. When the EVK build succeeds, update catalog.yaml and commit both
-     <vendor>-workshop/ and catalog.yaml to the workshop_catalog repository.
-```
+`apply-fix` and `record-fix` check every change against the allowlist and
+revert it when it touches anything else. If the kernel tree or
+`config/workshop.yaml` would be the fix, that is a `stop`, not a repair.
 
 ---
 
-## Toolchain Notes
+## Phase 4: Report
 
-**Always read the kernel tree's `debian/control` `Build-Depends` before
-assuming a toolchain version.** Different kernel branches have different
-requirements. Examples found in practice:
+Write `HANDOFF.md` in the workshop directory and summarise it to the user:
 
-| Kernel | Ubuntu base | clang | rustc | bindgen |
-|--------|-------------|-------|-------|---------|
-| linux-renesas 7.0 (resolute) | resolute 26.04 | clang-21 | 1.93.1 (native) | bindgen |
-| linux-qcom 6.8 (noble) | noble 24.04 | clang-18 | 1.75 (native) | bindgen-0.65 |
-| linux-xilinx 6.8 (noble) | noble 24.04 | clang-18 | 1.75 (native) | bindgen-0.65 |
-| linux-mtk (noble) | noble 24.04 | clang-18 | 1.75 (native) | bindgen-0.65 |
-| linux-mtk (jammy) | jammy 22.04 | clang-18 | 1.75 (native) | bindgen-0.65 |
+1. **Outcome** per target: `.deb`, snap. Built, failed, or not attempted. Not
+   booted unless it was.
+2. **What was built**: vendor, EVK, series, kernel repository, ref and commit.
+   If the build is not the kernel C3 certified, say so in one plain sentence.
+3. **Artifacts** with sizes and sha256 (`python3 scripts/run_stages.py report
+   --workshop <workshop_dir>` lists them).
+4. **Repairs**: summarise `REPAIR-LOG.md`; say which changes belong in the
+   template or in `references/known-fixes.json`.
+5. **Not proven**: the `build_validated` flags that were false, no hardware boot,
+   no gadget or initrd check for the snap.
+6. **If stopped**: the failing stage, the class (environment, kernel, repeated,
+   budget), the log path, and what the user can do. Do not retry endlessly.
 
-### Jammy (22.04) workshops — clang-18 kernels (e.g. MediaTek 5.15)
-Jammy kernels use `clang-18` and `bindgen-0.65`. Use `rustc` (default Jammy),
-`rust-src`, `rustfmt`. No LLVM 21 repo needed.
+---
 
-> **Important:** Jammy kernel 5.15 Build-Depends also requires `dwarfdump`
-> (the `dwarfdump` package), which is **separate from `dwarves`**. Both must be
-> installed. Without `dwarfdump` the kernel build fails with:
-> ```
-> /bin/sh: dwarfdump: not found
-> ```
+## Reference
 
-### Noble (24.04) workshops — clang-21 kernels (e.g. Renesas noble, MediaTek)
-These kernels require `clang-21` which is **not in Noble's default archive**.
-The `noble-build/hooks/setup-base` adds `apt.llvm.org/noble/` and installs
-`clang-21`, `llvm-21-dev`, `rustc-1.91`, `rust-1.91-src`, `rustfmt` (via
-`rustfmt-1.91` slave). The `update-alternatives` call registers `rustc-1.91`
-as the unversioned `rustc`. **`rust-src` must also be installed** — without it
-the kernel's `make rustavailable` fails with "core standard library not found".
-
-### Noble (24.04) workshops — clang-18 kernels (e.g. Qualcomm, MediaTek)
-These kernels use `clang-18` (available in Noble's default archive) and
-`bindgen-0.65`. Use `rustc` (default Noble 1.75), `rust-src`, `rustfmt`.
-No LLVM 21 repo needed. No `update-alternatives` needed.
-
-**Important:** The `check-health` hook must check for `bindgen-0.65` (not
-`bindgen`) when `bindgen-0.65` is installed. Using the wrong name causes the
-health check to fail and the workshop refresh to abort.
-
-### Resolute (26.04) workshops (e.g. Renesas resolute)
-Resolute ships `rustc 1.93.1` as the default `rustc` package. No versioned
-packages or `update-alternatives` are needed. The `resolute-build/hooks/setup-base`
-installs `rustc`, `rust-src`, `rustfmt`, and `bindgen` directly.
-
-### Ubuntu release matching
-**Always use the workshop variant that matches `ubuntu.release` in config.**
-If `config/workshop.yaml` says `release: resolute`, use `workshop launch <vendor>-resolute`.
-Using the wrong variant (e.g. noble for a resolute kernel) causes toolchain
-version failures that are hard to debug.
-
-### Private Launchpad repos and SSH
-For `git+ssh://` repos, the workshop container's `~/.ssh/config` must have
-`User <launchpad-id>` for `git.launchpad.net`. This is NOT forwarded from the
-host's `~/.ssh/config` by the ssh-agent plug — only the agent socket is forwarded.
-Add a `LAUNCHPAD_USER=<id>` entry to `config/board.env` (gitignored) and ensure
-`setup-project` reads it. See the `mediatek-workshop` for the pattern.
-
-### check-config false positives
-Some kernels have multi-flavour annotations where one flavour disables Rust
-(e.g. `arm64-qcom-rt: '-'`) but another requires it (e.g. `arm64: 'y'`).
-If `check-config` fails with `CONFIG_RUST_IS_AVAILABLE changed from y to -`
-on the non-RT flavour, the annotation is wrong — update it:
-```bash
-sed -i "s/'arm64-qcom-rt': '-'/'arm64-qcom-rt': 'y'/" \
-  kernel-src/debian.qcom/config/annotations
-```
-
-### Validation note
-`dpkg-deb -c` lists package contents with a `./` prefix (e.g. `./boot/vmlinuz-...`).
-The `sdk/deb/lib/validate.sh` boot-image check uses `\.?/boot/` to match both
-`/boot/` and `./boot/` correctly.
-
-## Guardrails
-
-- NEVER embed credentials in `config/workshop.yaml` or `snapcraft.yaml`.
-- NEVER modify other existing workshop.
-- NEVER modify `workshop-template/` — it is the canonical template.
-- Do NOT run any build commands. This skill only creates the workshop scaffold.
-- If the user provides ambiguous inputs, ask for clarification before writing files.
-- Always run the placeholder check (step 3) before reporting completion.
+- `references/repair.md`: repair scope, loop rules, report formats.
+- `references/known-fixes.json`: error signatures and their fixes.
+- `references/toolchain-notes.md`: toolchain per series, private repos, ssh.
+- `references/kernel-sources.json`: vendor and series table (read by the scripts).
+- `scripts/c3_lookup.py`, `instantiate.py`, `check_workshop.py`, `run_stages.py`:
+  run them with `--help`.
